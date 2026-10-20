@@ -21,6 +21,37 @@ class ReadArticleTests(unittest.TestCase):
 
 
 class SummarizeArticleTests(unittest.TestCase):
+    def test_describes_known_gemini_status_codes(self):
+        cases = (
+            (401, "invalid API key"),
+            (403, "lacks permission"),
+            (404, "model or endpoint is unavailable"),
+            (429, "quota or rate limit"),
+            (503, "temporarily unavailable"),
+        )
+
+        for status, expected in cases:
+            with self.subTest(status=status):
+                error = RuntimeError("provider response must not be shown")
+                error.code = status
+                message = article_summarizer.describe_gemini_error(error)
+                self.assertIn(expected, message)
+                self.assertNotIn("provider response", message)
+
+    def test_distinguishes_invalid_key_from_bad_request(self):
+        invalid_key = RuntimeError("API_KEY_INVALID")
+        invalid_key.code = 400
+        malformed_request = RuntimeError("Request body is malformed")
+        malformed_request.code = 400
+
+        self.assertIn("invalid API key", article_summarizer.describe_gemini_error(invalid_key))
+        self.assertIn("invalid request", article_summarizer.describe_gemini_error(malformed_request))
+
+    def test_describes_network_timeouts(self):
+        message = article_summarizer.describe_gemini_error(TimeoutError())
+
+        self.assertIn("network connection", message)
+
     def test_sends_article_to_gemini_and_returns_trimmed_summary(self):
         client = Mock()
         client.models.generate_content.return_value.text = "  A concise summary.  "

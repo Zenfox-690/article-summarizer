@@ -49,6 +49,43 @@ def summarize_article(
     return summary.strip()
 
 
+def describe_gemini_error(error: Exception) -> str:
+    """Return a safe, actionable message without exposing provider responses."""
+    status = getattr(error, "code", None)
+    if not isinstance(status, int):
+        status = getattr(error, "status_code", None)
+
+    if status == 400:
+        detail = str(error).lower()
+        if any(
+            marker in detail
+            for marker in ("api_key_invalid", "api key not valid", "invalid api key")
+        ):
+            reason = "invalid API key"
+        else:
+            reason = "invalid request"
+    elif status == 401:
+        reason = "invalid API key"
+    elif status == 403:
+        reason = "API key lacks permission for this request"
+    elif status == 404:
+        reason = "model or endpoint is unavailable"
+    elif status == 429:
+        reason = "quota or rate limit exceeded"
+    elif status in (500, 502, 503, 504):
+        reason = "Gemini is temporarily unavailable; retry later"
+    elif any(
+        marker in type(error).__name__.lower()
+        for marker in ("timeout", "network", "connect", "transport")
+    ):
+        reason = "network connection to Gemini failed; check connectivity and retry"
+    else:
+        reason = "request failed; check the API key, model, and network connection"
+
+    code = f" (HTTP {status})" if isinstance(status, int) else ""
+    return f"Gemini request failed{code}: {reason}."
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Summarize article text with the Google Gemini API."
@@ -88,12 +125,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         summary = summarize_article(article, api_key, args.model)
-    except Exception:
-        print(
-            "Gemini request failed. Check GEMINI_API_KEY, your network connection, "
-            "and the selected model.",
-            file=sys.stderr,
-        )
+    except Exception as error:
+        print(describe_gemini_error(error), file=sys.stderr)
         return 1
 
     print("Summary:\n")
