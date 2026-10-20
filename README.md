@@ -9,32 +9,39 @@ A small command-line application that summarizes article text with the Google Ge
 
 ## Setup
 
-Run these commands from the project directory:
+Run these commands from the project directory. The first command reuses the existing `.venv` when present; dependency installation is safe to repeat if needed:
 
 ```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
+if (-not (Test-Path .venv)) { py -m venv .venv }
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
 ```
 
-Open `.env` and replace the placeholder with your API key. Keep `.env` private; it is excluded by `.gitignore`.
+In Notepad, replace the placeholder value for `GEMINI_API_KEY`. Save and close the file. Never share or commit `.env`; it is excluded by `.gitignore`.
 
 ## Run
 
-Summarize a text file:
+### Direct input
 
-```powershell
-python article_summarizer.py --file article.txt
-```
-
-Or provide article text directly in the terminal. Finish input with `Ctrl+Z`, then `Enter` on Windows (or `Ctrl+D` on macOS/Linux):
+Run the CLI, then paste or type the article. On Windows, finish input with `Ctrl+Z`, then `Enter` to submit and return to the terminal:
 
 ```powershell
 python article_summarizer.py
 ```
 
-To select a different Gemini model, pass `--model MODEL_NAME`. The default is `gemini-2.5-flash`.
+### Text file
+
+Summarize the included sample article:
+
+```powershell
+python article_summarizer.py --file examples/sample_article.txt
+```
+
+For another UTF-8 text file, replace the path after `--file`.
+
+To select a different Gemini model, pass `--model MODEL_NAME`. The default is `gemini-3.8-flash`.
 
 ## Tests
 
@@ -44,18 +51,16 @@ The tests use Python's standard library and a mocked Gemini client; they do not 
 python -m unittest discover -s tests -v
 ```
 
-## Private GitHub repository
+## GitHub submission
 
-Create a new **private** repository on GitHub without initializing it with a README, then run the following from this project directory (replace `YOUR-USERNAME`):
+The project is published at [Zenfox-690/article-summarizer](https://github.com/Zenfox-690/article-summarizer). To publish reviewed documentation or sample changes to the existing `main` branch:
 
 ```powershell
-git init
-git add .
 git status --short
-git commit -m "Build Gemini article summarizer"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/article-summarizer.git
-git push -u origin main
+git add README.md examples/sample_article.txt
+git diff --cached
+git commit -m "Add manual testing sample and instructions"
+git push origin main
 ```
 
-Review `git status --short` before committing. The `.env` file is ignored; never add API keys to source files or commits.
+Review the staged diff before committing. `.env`, `.venv`, and generated caches are ignored; do not force-push or commit credentials.

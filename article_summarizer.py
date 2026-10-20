@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from google import genai
 
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def read_article(file_path: Path | None = None) -> str:

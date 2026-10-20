@@ -61,6 +61,18 @@ class SummarizeArticleTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
+    @patch.object(article_summarizer, "load_dotenv")
+    @patch.object(article_summarizer, "summarize_article", return_value="A readable summary.")
+    def test_summarizes_direct_input(self, summarize, _load_dotenv):
+        with patch.object(article_summarizer.sys, "stdin", io.StringIO("Article text")):
+            with patch("sys.stdout", new_callable=io.StringIO) as output:
+                result = article_summarizer.main([])
+
+        self.assertEqual(result, 0)
+        summarize.assert_called_once_with("Article text", "test-key", article_summarizer.DEFAULT_MODEL)
+        self.assertIn("Summary:\n\nA readable summary.", output.getvalue())
+
     @patch.dict("os.environ", {}, clear=True)
     @patch.object(article_summarizer, "load_dotenv")
     def test_reports_missing_api_key(self, _load_dotenv):
