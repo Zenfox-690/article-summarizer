@@ -8,16 +8,26 @@ from typing import Any
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
 
 DEFAULT_MODEL = "gemini-3.8-flash"
+REQUEST_TIMEOUT_MS = 60_000
 
 
 def read_article(file_path: Path | None = None) -> str:
-    """Read article text from a UTF-8 file or standard input."""
+    """Read article text from a UTF-8 file or interactive terminal input."""
     if file_path is not None:
         return file_path.read_text(encoding="utf-8")
-    return sys.stdin.read()
+
+    print("Enter or paste the article. Type END on its own line to submit; Ctrl+C cancels.")
+    lines = []
+    while True:
+        line = sys.stdin.readline()
+        if not line or line.strip().upper() == "END":
+            break
+        lines.append(line)
+    return "".join(lines)
 
 
 def summarize_article(
@@ -33,7 +43,13 @@ def summarize_article(
         raise ValueError("GEMINI_API_KEY is not set.")
 
     if client is None:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=REQUEST_TIMEOUT_MS,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
 
     response = client.models.generate_content(
         model=model,
@@ -107,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         article = read_article(args.file)
+    except KeyboardInterrupt:
+        print("Input cancelled. No request was sent.", file=sys.stderr)
+        return 130
     except (OSError, UnicodeError) as error:
         print(f"Could not read article: {error}", file=sys.stderr)
         return 1
@@ -125,6 +144,9 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         summary = summarize_article(article, api_key, args.model)
+    except KeyboardInterrupt:
+        print("Gemini request interrupted. No summary was returned.", file=sys.stderr)
+        return 130
     except Exception as error:
         print(describe_gemini_error(error), file=sys.stderr)
         return 1

@@ -15,12 +15,37 @@ class ReadArticleTests(unittest.TestCase):
 
             self.assertEqual(article_summarizer.read_article(article_file), "Caf\u00e9 article")
 
-    def test_reads_standard_input(self):
-        with patch.object(article_summarizer.sys, "stdin", io.StringIO("Article text")):
-            self.assertEqual(article_summarizer.read_article(), "Article text")
+    def test_reads_multiline_input_until_standalone_end(self):
+        terminal_input = io.StringIO("First paragraph.\nSecond paragraph.\nEND\nIgnored.\n")
+        with patch.object(article_summarizer.sys, "stdin", terminal_input):
+            with patch("sys.stdout", new_callable=io.StringIO):
+                article = article_summarizer.read_article()
+
+        self.assertEqual(article, "First paragraph.\nSecond paragraph.\n")
+
+    def test_eof_returns_entered_text(self):
+        terminal_input = io.StringIO("Article text\n")
+        with patch.object(article_summarizer.sys, "stdin", terminal_input):
+            with patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(article_summarizer.read_article(), "Article text\n")
+
+    def test_eof_without_text_returns_empty_string(self):
+        with patch.object(article_summarizer.sys, "stdin", io.StringIO("")):
+            with patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(article_summarizer.read_article(), "")
 
 
 class SummarizeArticleTests(unittest.TestCase):
+    @patch.object(article_summarizer.genai, "Client")
+    def test_configures_bounded_request_and_disables_long_retries(self, client_factory):
+        client_factory.return_value.models.generate_content.return_value.text = "Summary."
+
+        article_summarizer.summarize_article("Article text", "test-key")
+
+        options = client_factory.call_args.kwargs["http_options"]
+        self.assertEqual(options.timeout, article_summarizer.REQUEST_TIMEOUT_MS)
+        self.assertEqual(options.retry_options.attempts, 1)
+
     def test_describes_known_gemini_status_codes(self):
         cases = (
             (401, "invalid API key"),
@@ -94,14 +119,61 @@ class SummarizeArticleTests(unittest.TestCase):
 class MainTests(unittest.TestCase):
     @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
     @patch.object(article_summarizer, "load_dotenv")
+    @patch.object(article_summarizer, "summarize_article", return_value="File summary.")
+    def test_file_mode_preserves_file_input(self, summarize, _load_dotenv):
+        with tempfile.TemporaryDirectory() as directory:
+            article_file = Path(directory) / "article.txt"
+            article_file.write_text("File article", encoding="utf-8")
+            with patch("sys.stdout", new_callable=io.StringIO) as output:
+                result = article_summarizer.main(["--file", str(article_file)])
+
+        self.assertEqual(result, 0)
+        summarize.assert_called_once_with(
+            "File article", "test-key", article_summarizer.DEFAULT_MODEL
+        )
+        self.assertIn("File summary.", output.getvalue())
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
+    @patch.object(article_summarizer, "load_dotenv")
+    @patch.object(article_summarizer, "summarize_article")
+    def test_cancels_terminal_input_without_request(self, summarize, _load_dotenv):
+        terminal_input = Mock()
+        terminal_input.readline.side_effect = KeyboardInterrupt
+        with patch.object(article_summarizer.sys, "stdin", terminal_input):
+            with patch("sys.stderr", new_callable=io.StringIO) as error_output:
+                result = article_summarizer.main([])
+
+        self.assertEqual(result, 130)
+        self.assertIn("Input cancelled", error_output.getvalue())
+        summarize.assert_not_called()
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
+    @patch.object(article_summarizer, "load_dotenv")
+    @patch.object(article_summarizer, "summarize_article", side_effect=KeyboardInterrupt)
+    def test_cancels_gemini_request_without_traceback(self, _summarize, _load_dotenv):
+        with patch.object(article_summarizer.sys, "stdin", io.StringIO("Article text\nEND\n")):
+            with patch("sys.stderr", new_callable=io.StringIO) as error_output:
+                result = article_summarizer.main([])
+
+        self.assertEqual(result, 130)
+        self.assertIn("Gemini request interrupted", error_output.getvalue())
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
+    @patch.object(article_summarizer, "load_dotenv")
     @patch.object(article_summarizer, "summarize_article", return_value="A readable summary.")
     def test_summarizes_direct_input(self, summarize, _load_dotenv):
-        with patch.object(article_summarizer.sys, "stdin", io.StringIO("Article text")):
+        terminal_input = io.StringIO("First paragraph.\nSecond paragraph.\nEND\n")
+        with patch.object(article_summarizer.sys, "stdin", terminal_input):
             with patch("sys.stdout", new_callable=io.StringIO) as output:
                 result = article_summarizer.main([])
 
         self.assertEqual(result, 0)
-        summarize.assert_called_once_with("Article text", "test-key", article_summarizer.DEFAULT_MODEL)
+        summarize.assert_called_once_with(
+            "First paragraph.\nSecond paragraph.\n",
+            "test-key",
+            article_summarizer.DEFAULT_MODEL,
+        )
+        self.assertIn("END on its own line", output.getvalue())
         self.assertIn("Summary:\n\nA readable summary.", output.getvalue())
 
     @patch.dict("os.environ", {}, clear=True)
