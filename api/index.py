@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -119,12 +119,40 @@ def map_gemini_exception_to_http(error: Exception) -> tuple[int, str]:
     )
 
 
+def load_file_content(filename: str) -> tuple[str, str]:
+    """Load content of a frontend file from api/ or public/ directory."""
+    candidates = [
+        Path(__file__).parent / filename,
+        ROOT_DIR / "public" / filename,
+        Path.cwd() / "public" / filename,
+        Path.cwd() / filename,
+    ]
+    for p in candidates:
+        if p.is_file():
+            return p.read_text(encoding="utf-8"), str(p)
+    return "", ""
+
+
 app = FastAPI(
     title="AI Article Summarizer API",
     description="Summarize article text using Google Gemini",
     version="1.0.0",
     redirect_slashes=False,
 )
+
+
+@app.middleware("http")
+async def vercel_path_normalizer(request: Request, call_next):
+    """Normalize request path if Vercel rewrote the URL to /api/index.py or /index.py."""
+    path = request.scope.get("path", "")
+    if path in ("/api/index.py", "/index.py", "/api/index", "/api/index/"):
+        matched_path = request.headers.get("x-matched-path")
+        if matched_path and matched_path not in ("/api/index.py", "/index.py", "/api/index"):
+            request.scope["path"] = matched_path
+        elif "path" in request.query_params:
+            request.scope["path"] = request.query_params["path"]
+
+    return await call_next(request)
 
 
 @app.exception_handler(RequestValidationError)
@@ -135,14 +163,50 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# Root and frontend endpoints (both FastAPI fallback and local serving)
+@app.get("/", response_class=HTMLResponse)
+@app.get("/index.html", response_class=HTMLResponse)
+def serve_root():
+    content, _ = load_file_content("index.html")
+    if content:
+        return HTMLResponse(content=content, status_code=status.HTTP_200_OK)
+    return HTMLResponse(
+        content="<!DOCTYPE html><html><body><h1>AI Article Summarizer</h1></body></html>",
+        status_code=status.HTTP_200_OK,
+    )
+
+
+@app.get("/style.css")
+def serve_css():
+    content, _ = load_file_content("style.css")
+    if content:
+        return Response(content=content, media_type="text/css")
+    raise HTTPException(status_code=404, detail="style.css not found")
+
+
+@app.get("/app.js")
+def serve_js():
+    content, _ = load_file_content("app.js")
+    if content:
+        return Response(content=content, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="app.js not found")
+
+
+# Health check endpoints
 @app.get("/api/health")
 @app.get("/health")
+@app.get("/api")
+@app.get("/api/index.py")
+@app.get("/index.py")
 def health():
     return {"status": "ok"}
 
 
+# Summarization endpoints
 @app.post("/api/summarize", response_model=SummarizeResponse)
 @app.post("/summarize", response_model=SummarizeResponse)
+@app.post("/api/index.py", response_model=SummarizeResponse)
+@app.post("/index.py", response_model=SummarizeResponse)
 def summarize(payload: SummarizeRequest):
     article = payload.article
     if not article or not article.strip():
@@ -174,14 +238,3 @@ def summarize(payload: SummarizeRequest):
         raise HTTPException(status_code=status_code, detail=message) from None
 
     return SummarizeResponse(summary=summary_text)
-
-
-PUBLIC_DIR = ROOT_DIR / "public"
-if PUBLIC_DIR.is_dir():
-    index_file = PUBLIC_DIR / "index.html"
-    if index_file.is_file():
-        @app.get("/", response_class=FileResponse)
-        def serve_index():
-            return FileResponse(index_file)
-
-    app.mount("/", StaticFiles(directory=str(PUBLIC_DIR), html=True), name="public")

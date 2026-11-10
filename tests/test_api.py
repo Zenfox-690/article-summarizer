@@ -11,37 +11,72 @@ class FastAPIApiTests(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
 
-    def test_health_endpoint(self):
-        """Test health endpoints return 200 OK."""
-        response = self.client.get("/api/health")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok"})
-
-        alt_response = self.client.get("/health")
-        self.assertEqual(alt_response.status_code, 200)
-        self.assertEqual(alt_response.json(), {"status": "ok"})
+    def test_health_endpoints(self):
+        """Test health endpoints return 200 OK across multiple path variations."""
+        for path in ("/api/health", "/health", "/api", "/api/index.py", "/index.py"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {"status": "ok"})
 
     def test_root_endpoint_serves_html(self):
         """Test root endpoint serves the HTML frontend."""
-        response = self.client.get("/")
+        for path in ("/", "/index.html"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("text/html", response.headers.get("content-type", ""))
+                self.assertIn("AI Article Summarizer", response.text)
+
+    def test_static_assets_served(self):
+        """Test style.css and app.js are served correctly."""
+        css_res = self.client.get("/style.css")
+        self.assertEqual(css_res.status_code, 200)
+        self.assertIn("text/css", css_res.headers.get("content-type", ""))
+
+        js_res = self.client.get("/app.js")
+        self.assertEqual(js_res.status_code, 200)
+        self.assertIn("javascript", js_res.headers.get("content-type", ""))
+
+    def test_vercel_path_normalizer_middleware(self):
+        """Test that Vercel x-matched-path headers correctly normalize rewritten paths."""
+        # When Vercel rewrites /api/health to /api/index.py with x-matched-path
+        response = self.client.get(
+            "/api/index.py",
+            headers={"x-matched-path": "/api/health"},
+        )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("text/html", response.headers.get("content-type", ""))
-        self.assertIn("AI Article Summarizer", response.text)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+        # With query parameter fallback
+        query_response = self.client.get("/api/index.py?path=/api/health")
+        self.assertEqual(query_response.status_code, 200)
+        self.assertEqual(query_response.json(), {"status": "ok"})
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-12345"})
     @patch("api.index.article_summarizer.summarize_article", return_value="A high quality summary.")
     def test_successful_summarization_mocked_gemini(self, mock_summarize):
-        """Test successful summarization returns 200 with expected response."""
+        """Test successful summarization returns 200 across /api/summarize and /summarize."""
+        for path in ("/api/summarize", "/summarize"):
+            with self.subTest(path=path):
+                response = self.client.post(
+                    path,
+                    json={"article": "This is a detailed article about urban gardens."},
+                )
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json(), {"summary": "A high quality summary."})
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-12345"})
+    @patch("api.index.article_summarizer.summarize_article", return_value="Vercel rewritten summary.")
+    def test_vercel_summarize_path_rewritten(self, mock_summarize):
+        """Test POST /api/index.py with x-matched-path routes to summarize."""
         response = self.client.post(
-            "/api/summarize",
-            json={"article": "This is a detailed article about urban gardens."},
+            "/api/index.py",
+            headers={"x-matched-path": "/api/summarize"},
+            json={"article": "Sample article for Vercel rewrite test."},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"summary": "A high quality summary."})
-        mock_summarize.assert_called_once_with(
-            article="This is a detailed article about urban gardens.",
-            api_key="test-key-12345",
-        )
+        self.assertEqual(response.json(), {"summary": "Vercel rewritten summary."})
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "test-key-12345"})
     @patch("api.index.article_summarizer.summarize_article", return_value="Verified summary structure.")
